@@ -101,6 +101,21 @@ const gravBadge = (g) => ({
   livre: [COLORS.muted,   "Livre"],
 }[g] || [COLORS.muted, g]);
 
+function listarDesinvasao(dev) {
+  if (!dev?.desinvadir) return [];
+  const pendencias = [];
+  const d = dev.desinvadir;
+  Object.entries(d.cvc     || {}).forEach(([opt, v]) => { if (v === "Sim") pendencias.push(`Retirar CVC ${opt}`); });
+  Object.entries(d.arterial || {}).forEach(([opt, v]) => { if (v === "Sim") pendencias.push(`Retirar Art ${opt}`); });
+  Object.entries(d.picc    || {}).forEach(([opt, v]) => { if (v === "Sim") pendencias.push(`Retirar PICC ${opt}`); });
+  if (d.hd     === "Sim") pendencias.push("Retirar Cateter HD");
+  if (d.svd    === "Sim") pendencias.push("Retirar SVD");
+  if (d.sne    === "Sim") pendencias.push("Retirar SNE");
+  if (d.sng    === "Sim") pendencias.push("Retirar SNG");
+  if (d.drenos === "Sim") pendencias.push("Retirar Drenos");
+  return pendencias;
+}
+
 function computeAlerts(r, p) {
   const a = [];
   if (!r || !p.iniciais) return a;
@@ -110,7 +125,7 @@ function computeAlerts(r, p) {
   );
   if (r.tev === "Não") a.push("Sem profilaxia TEV");
   else if (r.tev === null && roundIniciado) a.push("TEV não avaliado");
-  if (r.riscoNutricional === "Sim" && r.terapiaNutricional !== "Sim") a.push("Risco nutricional sem terapia");
+  if (r.riscoNutricional === "Sim" && r.terapiaNutricional === "Não") a.push("Risco nutricional sem terapia nutricional");
   if (r.suporteResp === "VM invasiva" && !(r.planoDesmame?.length)) a.push("VM sem plano de desmame");
   if (r.dva === "Sim" && !r.pam) a.push("DVA sem meta PAM");
   if (r.pendenciaExame === "Sim" && r.descPendencia) a.push(r.descPendencia);
@@ -118,6 +133,7 @@ function computeAlerts(r, p) {
   if (r.bundles === "Não" && r.bundlesPendente) a.push(`Bundle pendente: ${r.bundlesPendente}`);
   const dias = p.dataAdm ? calcDias(p.dataAdm) : null;
   if (dias !== null && dias > 7) a.push(`${dias} dias internado`);
+  listarDesinvasao(r.dispositivos).forEach(d => a.push(d));
   return a;
 }
 
@@ -147,6 +163,10 @@ function gerarRelatorioGeral(patients, rounds, utiLabel) {
   const hd          = ocupados.filter(p => rounds[p.id]?.funcaoRenal === "Em HD");
   const totalLeitos = patients.length;
 
+  const contato     = ocupados.filter(p => rounds[p.id]?.contato === "Sim");
+  const riscoQueda  = ocupados.filter(p => rounds[p.id]?.riscoQueda === "Sim");
+  const riscoBronco = ocupados.filter(p => rounds[p.id]?.riscoBroncoaspiracao === "Sim");
+
   const alertasPorLeito = ocupados
     .map(p => ({ leito: p.leito, items: computeAlerts(rounds[p.id], p) }))
     .filter(g => g.items.length > 0);
@@ -172,6 +192,9 @@ function gerarRelatorioGeral(patients, rounds, utiLabel) {
 🫁 *Intubados (VMI):* ${intub.length > 0 ? intub.map(p => p.leito).join(", ") : "Nenhum"}
 💊 *Em DVA:* ${dva.length > 0 ? dva.map(p => p.leito).join(", ") : "Nenhum"}
 🩸 *Em HD:* ${hd.length > 0 ? hd.map(p => p.leito).join(", ") : "Nenhum"}
+🔶 *Precaução de contato:* ${contato.length > 0 ? contato.map(p => p.leito).join(", ") : "Nenhum"}
+🚶 *Risco de queda:* ${riscoQueda.length > 0 ? riscoQueda.map(p => p.leito).join(", ") : "Nenhum"}
+😮 *Risco de broncoaspiração:* ${riscoBronco.length > 0 ? riscoBronco.map(p => p.leito).join(", ") : "Nenhum"}
 
 ━━━━━━━━━━━━━━━━━
 🚨 *ALERTAS E PENDÊNCIAS*
@@ -191,6 +214,12 @@ function gerarRelatorioEspecifico(patients, rounds, utiLabel) {
   const blocos = ocupados.map(p => {
     const r = rounds[p.id];
     const dias = calcDias(p.dataAdm);
+    const desinvasao = listarDesinvasao(r?.dispositivos);
+    const riscoNutSemTerapia = r?.riscoNutricional === "Sim" && r?.terapiaNutricional === "Não";
+    const pendenciasTexto = [
+      r?.pendenciaExame === "Sim" && r?.descPendencia ? r.descPendencia : null,
+      ...desinvasao,
+    ].filter(Boolean);
     return `🛏 *${p.leito} — ${p.iniciais}*
 👤 ${p.idade ? p.idade + "a" : "?a"} | 🕐 ${dias !== null ? dias : "?"}d internado
 👨‍⚕️ *Médico:* ${r?.medicoAssistente || p.medicoAssistente || "—"}
@@ -200,12 +229,12 @@ function gerarRelatorioEspecifico(patients, rounds, utiLabel) {
 🧠 *Neuro:* RASS ${r?.rass || "—"} | Dor ${simNaoEmoji(r?.dor)} | Delirium ${simNaoEmoji(r?.delirium)}
 ❤️ *Cardio:* DVA ${simNaoEmoji(r?.dva)} | PAM: ${r?.pam || "—"} mmHg
 🫁 *Resp:* ${r?.suporteResp || "—"}${r?.planoDesmame?.length ? " | " + r.planoDesmame.join(", ") : ""}
-🍽️ *Nutrição:* ${r?.viaAlimentar || "—"} | Risco nutricional ${simNaoEmoji(r?.riscoNutricional)}${r?.riscoNutricional === "Sim" ? " | Terapia " + simNaoEmoji(r?.terapiaNutricional) : ""}
+🍽️ *Nutrição:* ${r?.viaAlimentar || "—"} | Risco nutricional ${simNaoEmoji(r?.riscoNutricional)}${r?.riscoNutricional === "Sim" ? " | Terapia " + simNaoEmoji(r?.terapiaNutricional) : ""}${riscoNutSemTerapia ? " ⚠️ SEM TERAPIA" : ""}
 🫘 *Renal:* ${r?.funcaoRenal || "—"} | BH ${r?.metaBH || "—"}
 🦠 *Infeccioso:* ATB ${simNaoEmoji(r?.atb)} | Piora ${simNaoEmoji(r?.pioraInfec)}
 💉 *Profilaxias:* TEV ${r?.tev || "—"} | LAMG ${r?.lamg || "—"} | HO ${r?.higieneOral || "—"}
 🔌 *Dispositivos:* ${listarDispositivos(r?.dispositivos)}
-${r?.pendenciaExame === "Sim" && r?.descPendencia ? `📌 *Pendência:* ${r.descPendencia}\n` : ""}🏠 *Alta:* ${r?.previsaoAlta || "—"}`;
+${pendenciasTexto.length > 0 ? `📌 *Pendências:* ${pendenciasTexto.join(" | ")}\n` : ""}🏠 *Alta:* ${r?.previsaoAlta || "—"}`;
   });
 
   return `🏥 *ROUND ${utiLabel.toUpperCase()}*
