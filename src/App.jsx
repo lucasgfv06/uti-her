@@ -40,8 +40,8 @@ const INITIAL_ROUND = {
   // Nutrição
   viaAlimentar: null, riscoNutricional: null, terapiaNutricional: null,
   aceitacao: null, metaCalorica: null, fono: null, glicemia: null, evacuacao: null,
-  // Renal / Infeccioso
-  funcaoRenal: null, metaBH: null, pioraInfec: null, atb: null,
+  // Renal
+  funcaoRenal: null, emHD: null, metaBH: null,
   // Profilaxias
   tev: null, lamg: null, cornea: null, higieneOral: null, decubito: null,
   bundles: null, bundlesPendente: "", mudancaDecubito: null, lesaoPressao: null, avalEspecializada: null,
@@ -160,7 +160,7 @@ function gerarRelatorioGeral(patients, rounds, utiLabel) {
   const graves      = ocupados.filter(p => p.gravidade === "alta");
   const intub       = ocupados.filter(p => rounds[p.id]?.suporteResp === "VM invasiva");
   const dva         = ocupados.filter(p => rounds[p.id]?.dva === "Sim");
-  const hd          = ocupados.filter(p => rounds[p.id]?.funcaoRenal === "Em HD");
+  const hd          = ocupados.filter(p => rounds[p.id]?.emHD === "Sim");
   const totalLeitos = patients.length;
 
   const contato     = ocupados.filter(p => rounds[p.id]?.contato === "Sim");
@@ -230,8 +230,7 @@ function gerarRelatorioEspecifico(patients, rounds, utiLabel) {
 ❤️ *Cardio:* DVA ${simNaoEmoji(r?.dva)} | PAM: ${r?.pam || "—"} mmHg
 🫁 *Resp:* ${r?.suporteResp || "—"}${r?.planoDesmame?.length ? " | " + r.planoDesmame.join(", ") : ""}
 🍽️ *Nutrição:* ${r?.viaAlimentar || "—"} | Risco nutricional ${simNaoEmoji(r?.riscoNutricional)}${r?.riscoNutricional === "Sim" ? " | Terapia " + simNaoEmoji(r?.terapiaNutricional) : ""}${riscoNutSemTerapia ? " ⚠️ SEM TERAPIA" : ""}
-🫘 *Renal:* ${r?.funcaoRenal || "—"} | BH ${r?.metaBH || "—"}
-🦠 *Infeccioso:* ATB ${simNaoEmoji(r?.atb)} | Piora ${simNaoEmoji(r?.pioraInfec)}
+🫘 *Renal:* Insuf. renal ${simNaoEmoji(r?.funcaoRenal)}${r?.funcaoRenal === "Sim" ? " | Em HD " + simNaoEmoji(r?.emHD) : ""} | BH ${r?.metaBH || "—"}
 💉 *Profilaxias:* TEV ${r?.tev || "—"} | LAMG ${r?.lamg || "—"} | HO ${r?.higieneOral || "—"}
 🔌 *Dispositivos:* ${listarDispositivos(r?.dispositivos)}
 ${pendenciasTexto.length > 0 ? `📌 *Pendências:* ${pendenciasTexto.join(" | ")}\n` : ""}🏠 *Alta:* ${r?.previsaoAlta || "—"}`;
@@ -271,8 +270,7 @@ function exportExcel(patients, rounds, utiLabel) {
       "Risco Nutricional": r.riscoNutricional || "", "Terapia Nutricional": r.terapiaNutricional || "",
       "Aceitação": r.aceitacao || "", "Meta Calórica": r.metaCalorica || "",
       "Fono": r.fono || "", "Glicemia": r.glicemia || "", "Evacuação": r.evacuacao || "",
-      "Função Renal": r.funcaoRenal || "", "BH Meta": r.metaBH || "",
-      "Piora Infecciosa": r.pioraInfec || "", "ATB": r.atb || "",
+      "Insuficiência Renal": r.funcaoRenal || "", "Em HD": r.emHD || "", "BH Meta": r.metaBH || "",
       "TEV": r.tev || "", "LAMG": r.lamg || "", "Córnea": r.cornea || "",
       "Higiene Oral": r.higieneOral || "", "Decúbito": r.decubito || "",
       "Bundles OK": r.bundles || "", "Bundle Pendente": r.bundlesPendente || "",
@@ -987,7 +985,7 @@ function RoundForm({ pat, round, onChange, onBack, onNovoRound, isMobile, saveSt
         <SecHdr title="Respiratório / Reabilitação" icon="🫁" />
         <Field label="Suporte respiratório">{["Sem suporte","O2 suplementar","VNI","VM invasiva"].map(o => <Pill key={o} label={o} selected={r.suporteResp===o} onClick={() => set("suporteResp",o)} />)}</Field>
         {(r.suporteResp==="VM invasiva"||r.suporteResp==="VNI") && <Field label="VM protetora?">{s2.map(o => <Pill key={o} label={o} selected={r.vmProtetora===o} onClick={() => set("vmProtetora",o)} />)}</Field>}
-        <Field label="Plano de desmame">{["Redução de parâmetros","TRE hoje","Ex-TOT","Sem proposta"].map(o => <MultiPill key={o} label={o} checked={(r.planoDesmame||[]).includes(o)} onChange={() => tog("planoDesmame",o)} />)}</Field>
+        {r.suporteResp==="VM invasiva" && <Field label="Plano de desmame">{["Redução de parâmetros","TRE hoje","Ex-TOT","Sem proposta"].map(o => <MultiPill key={o} label={o} checked={(r.planoDesmame||[]).includes(o)} onChange={() => tog("planoDesmame",o)} />)}</Field>}
         <Field label="Preocupações respiratórias">{["Piora respiratória","Piora de secreção"].map(o => <MultiPill key={o} label={o} checked={(r.preocResp||[]).includes(o)} onChange={() => tog("preocResp",o)} color={COLORS.danger} />)}</Field>
         <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
           <div style={{ minWidth: 110 }}><Field label="Escala IMS"><TInput value={r.ims} onChange={v => set("ims",v)} placeholder="0-10" w="90px" type="number" /></Field></div>
@@ -1014,19 +1012,13 @@ function RoundForm({ pat, round, onChange, onBack, onNovoRound, isMobile, saveSt
         </Grid>
       </div>
 
-      {/* Renal / Infeccioso */}
-      <Grid cols={2} isMobile={isMobile} gap={12}>
-        <div style={cardStyle}>
-          <SecHdr title="Renal" icon="🫘" />
-          <Field label="Função renal em piora?">{["Sim","Não","Em HD"].map(o => <Pill key={o} label={o} selected={r.funcaoRenal===o} onClick={() => set("funcaoRenal",o)} />)}</Field>
-          <Field label="Meta de balanço hídrico">{["Positivo","Negativo","Neutro"].map(o => <Pill key={o} label={o} selected={r.metaBH===o} onClick={() => set("metaBH",o)} />)}</Field>
-        </div>
-        <div style={cardStyle}>
-          <SecHdr title="Infeccioso" icon="🦠" />
-          <Field label="Piora infecciosa?">{s2.map(o => <Pill key={o} label={o} selected={r.pioraInfec===o} onClick={() => set("pioraInfec",o)} />)}</Field>
-          <Field label="Em uso de ATB?">{s2.map(o => <Pill key={o} label={o} selected={r.atb===o} onClick={() => set("atb",o)} />)}</Field>
-        </div>
-      </Grid>
+      {/* Renal */}
+      <div style={cardStyle}>
+        <SecHdr title="Renal" icon="🫘" />
+        <Field label="Insuficiência renal?">{s2.map(o => <Pill key={o} label={o} selected={r.funcaoRenal===o} onClick={() => set("funcaoRenal",o)} />)}</Field>
+        {r.funcaoRenal === "Sim" && <Field label="Em HD?">{s2.map(o => <Pill key={o} label={o} selected={r.emHD===o} onClick={() => set("emHD",o)} />)}</Field>}
+        <Field label="Meta de balanço hídrico">{["Positivo","Negativo","Neutro"].map(o => <Pill key={o} label={o} selected={r.metaBH===o} onClick={() => set("metaBH",o)} />)}</Field>
+      </div>
 
       {/* Profilaxias */}
       <div style={cardStyle}>
