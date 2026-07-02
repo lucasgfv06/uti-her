@@ -74,6 +74,69 @@ function normalizarRound(r) {
   return out;
 }
 
+// ── Safety Huddle (UTI 8º Andar) ────────────────────────────────────────────
+const INITIAL_HUDDLE_ROUND = {
+  // Cuidados gerais
+  contato: null, riscoBroncoaspiracao: null, riscoQueda: null, riscoLPP: null,
+  // Nutrição
+  viaAlimentar: null, riscoNutricional: null, terapiaNutricional: null,
+  aceitacao: null, metaCalorica: null, fono: null, glicemia: null, evacuacao: null,
+  // Profilaxias
+  tev: null, lamg: null, cornea: null, higieneOral: null, decubito: null,
+  bundles: null, bundlesPendente: "", mudancaDecubito: null, lesaoPressao: null, avalEspecializada: null,
+  // Dispositivos / Planejamento
+  dispositivos: INITIAL_DISPOSITIVOS,
+  diretivas: [], pendenciaExame: null, descPendencia: "", previsaoAlta: null,
+  diagnostico: "", medicoAssistente: "",
+};
+
+const INITIAL_HUDDLE_META = {
+  eventos: null, eventosTexto: "",
+  situacaoEspecial: null, situacaoTexto: "",
+  leitosGraves: [],
+};
+
+function normalizarHuddleRound(r) {
+  if (!r) return null;
+  const out = { ...INITIAL_HUDDLE_ROUND, ...r };
+  if (!out.dispositivos) out.dispositivos = { ...INITIAL_DISPOSITIVOS };
+  else {
+    out.dispositivos = { ...INITIAL_DISPOSITIVOS, ...out.dispositivos };
+    if (!Array.isArray(out.dispositivos.cvc))     out.dispositivos.cvc = [];
+    if (!Array.isArray(out.dispositivos.arterial)) out.dispositivos.arterial = [];
+    if (!Array.isArray(out.dispositivos.picc))    out.dispositivos.picc = [];
+    if (!out.dispositivos.desinvadir) out.dispositivos.desinvadir = { ...INITIAL_DISPOSITIVOS.desinvadir };
+    else {
+      out.dispositivos.desinvadir = { ...INITIAL_DISPOSITIVOS.desinvadir, ...out.dispositivos.desinvadir };
+      if (!out.dispositivos.desinvadir.cvc     || typeof out.dispositivos.desinvadir.cvc !== "object")     out.dispositivos.desinvadir.cvc = {};
+      if (!out.dispositivos.desinvadir.arterial || typeof out.dispositivos.desinvadir.arterial !== "object") out.dispositivos.desinvadir.arterial = {};
+      if (!out.dispositivos.desinvadir.picc    || typeof out.dispositivos.desinvadir.picc !== "object")    out.dispositivos.desinvadir.picc = {};
+    }
+  }
+  if (!Array.isArray(out.diretivas)) out.diretivas = [];
+  return out;
+}
+
+function normalizarHuddleMeta(m) {
+  if (!m) return { ...INITIAL_HUDDLE_META };
+  const out = { ...INITIAL_HUDDLE_META, ...m };
+  if (!Array.isArray(out.leitosGraves)) out.leitosGraves = [];
+  return out;
+}
+
+function computeHuddleAlerts(r, p) {
+  const a = [];
+  if (!r || !p.iniciais) return a;
+  if (r.tev === "Não") a.push("Sem profilaxia TEV");
+  if (r.riscoLPP === "Sim") a.push("Risco de LPP");
+  if (r.lesaoPressao === "Sim") a.push("LPP presente");
+  if (r.riscoNutricional === "Sim" && r.terapiaNutricional === "Não") a.push("Risco nutricional sem terapia nutricional");
+  if (r.pendenciaExame === "Sim" && r.descPendencia) a.push(r.descPendencia);
+  if (r.bundles === "Não" && r.bundlesPendente) a.push(`Bundle pendente: ${r.bundlesPendente}`);
+  listarDesinvasao(r.dispositivos).forEach(d => a.push(d));
+  return a;
+}
+
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(typeof window !== "undefined" ? window.innerWidth < 700 : false);
   useEffect(() => {
@@ -237,6 +300,89 @@ ${pendenciasTexto.length > 0 ? `📌 *Pendências:* ${pendenciasTexto.join(" | "
   });
 
   return `🏥 *ROUND ${utiLabel.toUpperCase()}*
+📅 *${dt}*
+
+━━━━━━━━━━━━━━━━━
+${blocos.join("\n\n━━━━━━━━━━━━━━━━━\n")}
+
+━━━━━━━━━━━━━━━━━
+📊 _Gerado pelo UTI Round — HER_`;
+}
+
+function gerarRelatorioHuddleGeral(patients, huddleRounds, meta, utiLabel) {
+  const ocupados = patients.filter(p => p.iniciais);
+  const vagos    = patients.filter(p => !p.iniciais);
+  const graves   = ocupados.filter(p => (meta?.leitosGraves || []).includes(p.leito));
+  const dt = new Date().toLocaleDateString("pt-BR") + " — " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+  const alertasPorLeito = ocupados
+    .map(p => ({ leito: p.leito, items: computeHuddleAlerts(huddleRounds[p.id], p) }))
+    .filter(g => g.items.length > 0);
+  const alertasTexto = alertasPorLeito.length > 0
+    ? alertasPorLeito.map(g => `🛏 *${g.leito}*\n${g.items.map(a => `  ⚠️ ${a}`).join("\n")}`).join("\n\n")
+    : "✅ Sem alertas no momento";
+
+  return `🛟 *SAFETY HUDDLE ${utiLabel.toUpperCase()}*
+📅 *${dt}*
+
+━━━━━━━━━━━━━━━━━
+📊 *RESUMO GERAL*
+━━━━━━━━━━━━━━━━━
+
+🛏 *Leitos ocupados:* ${ocupados.length}/${patients.length}
+🔓 *Leitos vagos:* ${vagos.length > 0 ? vagos.map(p => p.leito).join(", ") : "Nenhum"}
+🚨 *Pacientes graves:* ${graves.length > 0 ? graves.map(p => `${p.leito} (${p.iniciais})`).join(", ") : "Nenhum"}
+
+━━━━━━━━━━━━━━━━━
+🗣 *EVENTOS ASSISTENCIAIS (24H)*
+━━━━━━━━━━━━━━━━━
+
+${meta?.eventos === "Sim" ? `⚠️ ${meta.eventosTexto || "Sem descrição"}` : "✅ Nenhum evento relatado"}
+
+━━━━━━━━━━━━━━━━━
+👤 *PACIENTES EM SITUAÇÃO ESPECIAL*
+━━━━━━━━━━━━━━━━━
+
+${meta?.situacaoEspecial === "Sim" ? `⚠️ ${meta.situacaoTexto || "Sem descrição"}` : "✅ Nenhum paciente em situação especial"}
+
+━━━━━━━━━━━━━━━━━
+🚨 *ALERTAS E PENDÊNCIAS*
+━━━━━━━━━━━━━━━━━
+
+${alertasTexto}
+
+━━━━━━━━━━━━━━━━━
+📊 _Gerado pelo UTI Round — HER_`;
+}
+
+function gerarRelatorioHuddleEspecifico(patients, huddleRounds, meta, utiLabel) {
+  const ocupados = patients.filter(p => p.iniciais);
+  const dt = new Date().toLocaleDateString("pt-BR") + " — " + new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  if (ocupados.length === 0) return `🛟 *SAFETY HUDDLE ${utiLabel.toUpperCase()}*\n📅 *${dt}*\n\nNenhum paciente admitido.`;
+
+  const blocos = ocupados.map(p => {
+    const r = huddleRounds[p.id];
+    const dias = calcDias(p.dataAdm);
+    const desinvasao = listarDesinvasao(r?.dispositivos);
+    const riscoNutSemTerapia = r?.riscoNutricional === "Sim" && r?.terapiaNutricional === "Não";
+    const pendenciasTexto = [
+      r?.pendenciaExame === "Sim" && r?.descPendencia ? r.descPendencia : null,
+      ...desinvasao,
+    ].filter(Boolean);
+    const grave = (meta?.leitosGraves || []).includes(p.leito);
+    return `🛏 *${p.leito} — ${p.iniciais}*${grave ? " 🚨 GRAVE" : ""}
+👤 ${p.idade ? p.idade + "a" : "?a"} | 🕐 ${dias !== null ? dias : "?"}d internado
+👨‍⚕️ *Médico:* ${r?.medicoAssistente || p.medicoAssistente || "—"}
+📋 *Diagnóstico:* ${r?.diagnostico || p.diagnostico || "—"}
+
+🛡️ *Cuidados gerais:* Contato ${simNaoEmoji(r?.contato)} | Broncoaspiração ${simNaoEmoji(r?.riscoBroncoaspiracao)} | Queda ${simNaoEmoji(r?.riscoQueda)} | Risco LPP ${simNaoEmoji(r?.riscoLPP)}
+🍽️ *Nutrição:* ${r?.viaAlimentar || "—"} | Risco nutricional ${simNaoEmoji(r?.riscoNutricional)}${r?.riscoNutricional === "Sim" ? " | Terapia " + simNaoEmoji(r?.terapiaNutricional) : ""}${riscoNutSemTerapia ? " ⚠️ SEM TERAPIA" : ""}
+💉 *Profilaxias:* TEV ${r?.tev || "—"} | LAMG ${r?.lamg || "—"} | HO ${r?.higieneOral || "—"} | LPP presente ${simNaoEmoji(r?.lesaoPressao)}
+🔌 *Dispositivos:* ${listarDispositivos(r?.dispositivos)}
+${pendenciasTexto.length > 0 ? `📌 *Pendências:* ${pendenciasTexto.join(" | ")}\n` : ""}🏠 *Alta:* ${r?.previsaoAlta || "—"}`;
+  });
+
+  return `🛟 *SAFETY HUDDLE ${utiLabel.toUpperCase()}*
 📅 *${dt}*
 
 ━━━━━━━━━━━━━━━━━
@@ -745,6 +891,55 @@ function RelatorioModal({ patients, rounds, onClose, onSave, utiLabel }) {
   );
 }
 
+function HuddleRelatorioModal({ patients, huddleRounds, meta, onClose, onSave, utiLabel }) {
+  const [tipo, setTipo] = useState("geral");
+  const [copiado, setCopiado] = useState(false);
+  const texto = tipo === "geral"
+    ? gerarRelatorioHuddleGeral(patients, huddleRounds, meta, utiLabel)
+    : gerarRelatorioHuddleEspecifico(patients, huddleRounds, meta, utiLabel);
+
+  const copiar = async () => {
+    try { await navigator.clipboard.writeText(texto); setCopiado(true); setTimeout(() => setCopiado(false), 2000); }
+    catch { alert("Não foi possível copiar. Selecione o texto manualmente."); }
+  };
+
+  return (
+    <Modal onClose={onClose} maxWidth={640}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontWeight: 800, fontSize: 17, color: COLORS.green }}>🛟 Relatório — Safety Huddle</div>
+        <button type="button" onClick={onClose} style={{ background: "none", border: "none", fontSize: 26, cursor: "pointer", color: COLORS.muted, lineHeight: 1, padding: 0 }}>×</button>
+      </div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {[["geral","📊 Geral"],["especifico","🛏 Por Paciente"]].map(([v,l]) => (
+          <button type="button" key={v} onClick={() => setTipo(v)} style={{
+            padding: "8px 16px", borderRadius: 10,
+            border: `1.5px solid ${tipo === v ? COLORS.greenMid : COLORS.border}`,
+            background: tipo === v ? COLORS.greenMid : "#fff",
+            color: tipo === v ? "#fff" : COLORS.green,
+            fontSize: 13, fontWeight: 600, cursor: "pointer", flex: "1 1 auto", minHeight: 38,
+          }}>{l}</button>
+        ))}
+      </div>
+      <textarea readOnly value={texto} style={{
+        width: "100%", border: `1px solid ${COLORS.border}`, borderRadius: 10, padding: 12,
+        fontSize: 12, fontFamily: "monospace", resize: "vertical",
+        background: COLORS.lightBg, color: COLORS.green, minHeight: 240, maxHeight: "40vh", boxSizing: "border-box",
+      }} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
+        <button type="button" onClick={copiar} style={{
+          flex: "2 1 160px", padding: "11px", borderRadius: 10, border: "none",
+          background: copiado ? COLORS.success : "#25D366", color: "#fff",
+          fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 42,
+        }}>{copiado ? "✓ Copiado!" : "📲 Copiar p/ WhatsApp"}</button>
+        <button type="button" onClick={() => onSave(`huddle-${tipo}`, texto)} style={{
+          flex: "1 1 100px", padding: "11px", borderRadius: 10, border: "none",
+          background: COLORS.accent, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 42,
+        }}>💾 Salvar</button>
+      </div>
+    </Modal>
+  );
+}
+
 function HistoricoModal({ relatorios, onDelete, onClose, isMobile }) {
   const [sel, setSel] = useState(null);
   const [confirm, setConfirm] = useState(false);
@@ -778,7 +973,9 @@ function HistoricoModal({ relatorios, onDelete, onClose, isMobile }) {
                 background: sel === r ? COLORS.greenMid + "18" : COLORS.lightBg,
                 border: `1px solid ${sel === r ? COLORS.greenMid : COLORS.border}`,
               }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.green }}>{r.tipo === "geral" ? "📊 Geral" : "🛏 Por paciente"}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.green }}>
+                  {r.tipo.startsWith("huddle") ? "🛟 " : ""}{r.tipo.endsWith("geral") ? "📊 Geral" : "🛏 Por paciente"}
+                </div>
                 <div style={{ fontSize: 11, color: COLORS.muted }}>{r.data}</div>
               </div>
             ))}
@@ -824,9 +1021,9 @@ function HistoricoModal({ relatorios, onDelete, onClose, isMobile }) {
 }
 
 // ── Patient Card ──────────────────────────────────────────────────────────────
-function PatientCard({ pat, round, onSelect, onEdit }) {
+function PatientCard({ pat, round, onSelect, onEdit, alertsFn = computeAlerts, doneLabel = "✓ Round feito" }) {
   const [color, label] = gravBadge(pat.gravidade);
-  const alerts  = computeAlerts(round, pat);
+  const alerts  = alertsFn(round, pat);
   const isEmpty = !pat.iniciais;
   const dias    = pat.dataAdm ? calcDias(pat.dataAdm) : null;
 
@@ -872,7 +1069,7 @@ function PatientCard({ pat, round, onSelect, onEdit }) {
           )}
           <div style={{ marginTop: 8, marginLeft: 8 }}>
             {round
-              ? <span style={{ fontSize: 11, background: COLORS.success+"20", color: COLORS.success, padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>✓ Round feito</span>
+              ? <span style={{ fontSize: 11, background: COLORS.success+"20", color: COLORS.success, padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>{doneLabel}</span>
               : <span style={{ fontSize: 11, background: COLORS.warn+"18", color: COLORS.warn, padding: "2px 8px", borderRadius: 8, fontWeight: 600 }}>⏳ Pendente</span>}
           </div>
         </div>
@@ -1084,6 +1281,167 @@ function RoundForm({ pat, round, onChange, onBack, onNovoRound, isMobile, saveSt
   );
 }
 
+// ── Safety Huddle Form ───────────────────────────────────────────────────────
+function HuddleForm({ pat, round, onChange, onBack, onNovoRound, isMobile, saveStatus }) {
+  const [confirmNovo, setConfirmNovo] = useState(false);
+  const r = round || { ...INITIAL_HUDDLE_ROUND };
+  const set = (k, v) => onChange({ ...r, [k]: v });
+  const tog = (k, v) => {
+    const a = r[k] || [];
+    onChange({ ...r, [k]: a.includes(v) ? a.filter(x => x !== v) : [...a, v] });
+  };
+  const s2 = ["Sim","Não"], s3 = ["Sim","Não","Sem indicação"];
+
+  const cardStyle = {
+    background: COLORS.card, borderRadius: 14,
+    padding: isMobile ? "14px 14px" : "18px 20px",
+    marginBottom: 12, border: `1px solid ${COLORS.border}`,
+  };
+  const diasAdm = pat.dataAdm ? calcDias(pat.dataAdm) : null;
+
+  return (
+    <div style={{ maxWidth: 820, margin: "0 auto", paddingBottom: 80 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
+        <button type="button" onClick={onBack} style={{
+          background: "none", border: `1.5px solid ${COLORS.border}`, borderRadius: 8,
+          padding: "8px 14px", cursor: "pointer", fontSize: 13, color: COLORS.green, fontWeight: 600, minHeight: 38,
+        }}>← Voltar</button>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 11, color: COLORS.muted, fontWeight: 700, textTransform: "uppercase" }}>{pat.leito} · Safety Huddle — {new Date().toLocaleDateString("pt-BR")}</div>
+          <div style={{ fontSize: isMobile ? 17 : 20, fontWeight: 800, color: COLORS.green }}>{pat.iniciais}</div>
+          <div style={{ fontSize: 12, color: COLORS.muted, marginTop: 2 }}>
+            {pat.idade && `${pat.idade} anos`}
+            {pat.idade && pat.dataAdm && " · "}
+            {pat.dataAdm && diasAdm !== null && `${diasAdm} dia(s) internado`}
+          </div>
+        </div>
+        <button type="button" onClick={() => setConfirmNovo(true)} style={{
+          padding: "8px 14px", borderRadius: 8, border: `1.5px solid ${COLORS.warn}`,
+          background: "#fff", color: COLORS.warn, fontSize: 13, fontWeight: 700, cursor: "pointer", minHeight: 38,
+        }}>🔄 Novo Huddle</button>
+      </div>
+
+      {confirmNovo && (
+        <div style={{ background: COLORS.warn+"18", border: `1.5px solid ${COLORS.warn}`, borderRadius: 12, padding: 14, marginBottom: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: COLORS.warn, marginBottom: 10 }}>
+            ⚠️ Iniciar novo checklist? Todos os campos serão zerados (o paciente continua admitido).
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" onClick={() => { onNovoRound(); setConfirmNovo(false); }} style={{
+              flex: 1, padding: "10px", borderRadius: 8, border: "none",
+              background: COLORS.warn, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer", minHeight: 40,
+            }}>Sim, novo checklist</button>
+            <button type="button" onClick={() => setConfirmNovo(false)} style={{
+              flex: 1, padding: "10px", borderRadius: 8, border: `1.5px solid ${COLORS.border}`,
+              background: "#fff", color: COLORS.green, fontSize: 13, fontWeight: 600, cursor: "pointer", minHeight: 40,
+            }}>Cancelar</button>
+          </div>
+        </div>
+      )}
+
+      {/* Identificação */}
+      <div style={cardStyle}>
+        <SecHdr title="Identificação" icon="🏥" />
+        <Grid cols={2} isMobile={isMobile}>
+          <Field label="Diagnóstico"><TInput value={r.diagnostico} onChange={v => set("diagnostico", v)} placeholder="Ex: Sepse pulmonar" /></Field>
+          <Field label="Médico Assistente"><TInput value={r.medicoAssistente} onChange={v => set("medicoAssistente", v)} placeholder="Nome do médico" /></Field>
+        </Grid>
+      </div>
+
+      {/* Cuidados Gerais */}
+      <div style={cardStyle}>
+        <SecHdr title="Cuidados Gerais" icon="🛡️" />
+        <Grid cols={2} isMobile={isMobile}>
+          <Field label="Precaução de contato?">{s2.map(o => <Pill key={o} label={o} selected={r.contato===o} onClick={() => set("contato",o)} />)}</Field>
+          <Field label="Risco de broncoaspiração?">{s2.map(o => <Pill key={o} label={o} selected={r.riscoBroncoaspiracao===o} onClick={() => set("riscoBroncoaspiracao",o)} color={o==="Sim"?COLORS.danger:COLORS.greenMid} />)}</Field>
+          <Field label="Risco de queda?">{s2.map(o => <Pill key={o} label={o} selected={r.riscoQueda===o} onClick={() => set("riscoQueda",o)} color={o==="Sim"?COLORS.warn:COLORS.greenMid} />)}</Field>
+          <Field label="Risco de LPP?">{s2.map(o => <Pill key={o} label={o} selected={r.riscoLPP===o} onClick={() => set("riscoLPP",o)} color={o==="Sim"?COLORS.danger:COLORS.greenMid} />)}</Field>
+        </Grid>
+      </div>
+
+      {/* Nutrição */}
+      <div style={cardStyle}>
+        <SecHdr title="Gastrointestinal / Nutrição" icon="🍽️" />
+        <Field label="Via alimentar">{["VO","SNE/GTT","NPT","Zero"].map(o => <Pill key={o} label={o} selected={r.viaAlimentar===o} onClick={() => set("viaAlimentar",o)} />)}</Field>
+        <Grid cols={2} isMobile={isMobile}>
+          <div>
+            <Field label="Risco nutricional?">{s2.map(o => <Pill key={o} label={o} selected={r.riscoNutricional===o} onClick={() => set("riscoNutricional",o)} color={o==="Sim"?COLORS.warn:COLORS.greenMid} />)}</Field>
+            {r.riscoNutricional === "Sim" && (
+              <Field label="Terapia nutricional?">{s2.map(o => <Pill key={o} label={o} selected={r.terapiaNutricional===o} onClick={() => set("terapiaNutricional",o)} color={o==="Não"?COLORS.danger:COLORS.greenMid} />)}</Field>
+            )}
+          </div>
+          <Field label="Meta calórica?">{s2.map(o => <Pill key={o} label={o} selected={r.metaCalorica===o} onClick={() => set("metaCalorica",o)} />)}</Field>
+          <Field label="Aceitação">{["Normal","Baixa","Intolerância"].map(o => <Pill key={o} label={o} selected={r.aceitacao===o} onClick={() => set("aceitacao",o)} />)}</Field>
+          <Field label="Avaliação fono?">{s2.map(o => <Pill key={o} label={o} selected={r.fono===o} onClick={() => set("fono",o)} />)}</Field>
+          <Field label="Glicemia adequada?">{s2.map(o => <Pill key={o} label={o} selected={r.glicemia===o} onClick={() => set("glicemia",o)} />)}</Field>
+          <Field label="Evacuação < 3 dias?">{s2.map(o => <Pill key={o} label={o} selected={r.evacuacao===o} onClick={() => set("evacuacao",o)} />)}</Field>
+        </Grid>
+      </div>
+
+      {/* Profilaxias */}
+      <div style={cardStyle}>
+        <SecHdr title="Profilaxias" icon="💉" />
+        <Grid cols={2} isMobile={isMobile}>
+          <Field label="Profilaxia TEV">{s3.map(o => <Pill key={o} label={o} selected={r.tev===o} onClick={() => set("tev",o)} color={o==="Não"?COLORS.danger:COLORS.greenMid} />)}</Field>
+          <Field label="Profilaxia LAMG">{s3.map(o => <Pill key={o} label={o} selected={r.lamg===o} onClick={() => set("lamg",o)} />)}</Field>
+          <Field label="Úlcera de córnea">{s3.map(o => <Pill key={o} label={o} selected={r.cornea===o} onClick={() => set("cornea",o)} />)}</Field>
+          <Field label="Higiene oral">{s3.map(o => <Pill key={o} label={o} selected={r.higieneOral===o} onClick={() => set("higieneOral",o)} />)}</Field>
+          <Field label="Decúbito elevado">{s3.map(o => <Pill key={o} label={o} selected={r.decubito===o} onClick={() => set("decubito",o)} />)}</Field>
+          <Field label="Bundles OK?">{s2.map(o => <Pill key={o} label={o} selected={r.bundles===o} onClick={() => set("bundles",o)} color={o==="Não"?COLORS.danger:COLORS.greenMid} />)}</Field>
+        </Grid>
+        {r.bundles==="Não" && <Field label="Bundle pendente"><TInput value={r.bundlesPendente} onChange={v => set("bundlesPendente",v)} placeholder="Qual bundle?" /></Field>}
+        <Grid cols={2} isMobile={isMobile}>
+          <Field label="Mudança de decúbito?">{s2.map(o => <Pill key={o} label={o} selected={r.mudancaDecubito===o} onClick={() => set("mudancaDecubito",o)} />)}</Field>
+          <div>
+            <Field label="Lesão por pressão?">{s2.map(o => <Pill key={o} label={o} selected={r.lesaoPressao===o} onClick={() => set("lesaoPressao",o)} color={o==="Sim"?COLORS.danger:COLORS.greenMid} />)}</Field>
+            {r.lesaoPressao==="Sim" && (
+              <Field label="Avaliação especializada?">{["Comissão curativo","Cirurgia plástica","Não necessário"].map(o => <Pill key={o} label={o} selected={r.avalEspecializada===o} onClick={() => set("avalEspecializada",o)} />)}</Field>
+            )}
+          </div>
+        </Grid>
+      </div>
+
+      {/* Dispositivos */}
+      <div style={cardStyle}>
+        <SecHdr title="Dispositivos Invasivos" icon="🔌" />
+        <DispositivosSection dev={r.dispositivos} onChange={v => set("dispositivos", v)} />
+      </div>
+
+      {/* Planejamento */}
+      <div style={cardStyle}>
+        <SecHdr title="Objetivos de Cuidado e Planejamento" icon="📋" />
+        <Field label="Diretivas de cuidado">{["Não RCP","Não HD","Não IOT","Não DVA","Não HGT","Não coletar exames","Sem diretivas"].map(o => <MultiPill key={o} label={o} checked={(r.diretivas||[]).includes(o)} onChange={() => tog("diretivas",o)} color={o==="Sem diretivas"?COLORS.success:COLORS.danger} />)}</Field>
+        <Grid cols={2} isMobile={isMobile}>
+          <div>
+            <Field label="Pendência de exame/procedimento?">{s2.map(o => <Pill key={o} label={o} selected={r.pendenciaExame===o} onClick={() => set("pendenciaExame",o)} />)}</Field>
+            {r.pendenciaExame==="Sim" && <TArea value={r.descPendencia} onChange={v => set("descPendencia",v)} placeholder="Descreva a pendência..." />}
+          </div>
+          <Field label="Previsão de alta">{["Hoje","24–48h","> 48h"].map(o => <Pill key={o} label={o} selected={r.previsaoAlta===o} onClick={() => set("previsaoAlta",o)} />)}</Field>
+        </Grid>
+      </div>
+
+      {/* Status de salvamento */}
+      <div style={{
+        background: saveStatus === "saved" ? COLORS.success + "18" : saveStatus === "error" ? COLORS.danger + "18" : COLORS.lightBg,
+        border: `1.5px solid ${saveStatus === "saved" ? COLORS.success : saveStatus === "error" ? COLORS.danger : COLORS.border}`,
+        borderRadius: 12, padding: "12px 16px", marginTop: 4,
+        display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10,
+      }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: saveStatus === "saved" ? COLORS.success : saveStatus === "error" ? COLORS.danger : COLORS.muted }}>
+          {saveStatus === "saving" && "💾 Salvando automaticamente..."}
+          {saveStatus === "saved"  && "✓ Salvo com sucesso"}
+          {saveStatus === "error"  && "⚠ Falha ao salvar — verifique sua conexão"}
+          {!saveStatus && "💡 Suas alterações são salvas automaticamente"}
+        </div>
+        <button type="button" onClick={onBack} style={{
+          padding: "10px 24px", borderRadius: 10, border: "none",
+          background: COLORS.greenMid, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer", minHeight: 42,
+        }}>← Voltar ao dashboard</button>
+      </div>
+    </div>
+  );
+}
+
 // ── Tela seleção de UTI ───────────────────────────────────────────────────────
 function UtiSelector({ onSelect }) {
   return (
@@ -1123,13 +1481,58 @@ function UtiSelector({ onSelect }) {
   );
 }
 
+// ── Cartão de perguntas gerais do Safety Huddle ─────────────────────────────────
+function HuddleMetaCard({ meta, onChange, patients, isMobile }) {
+  const m = meta || { ...INITIAL_HUDDLE_META };
+  const set = (k, v) => onChange({ ...m, [k]: v });
+  const ocupados = patients.filter(p => p.iniciais);
+  const s2 = ["Sim","Não"];
+
+  const toggleLeito = (leito) => {
+    const cur = m.leitosGraves || [];
+    onChange({ ...m, leitosGraves: cur.includes(leito) ? cur.filter(l => l !== leito) : [...cur, leito] });
+  };
+
+  const cardStyle = {
+    background: COLORS.card, borderRadius: 14,
+    padding: isMobile ? "14px 14px" : "18px 20px",
+    marginBottom: 16, border: `1px solid ${COLORS.border}`,
+  };
+
+  return (
+    <div style={cardStyle}>
+      <SecHdr title="Safety Huddle — Perguntas Gerais" icon="🛟" />
+      <div style={{ marginBottom: 14 }}>
+        <Field label="Eventos assistenciais nas últimas 24h?">{s2.map(o => <Pill key={o} label={o} selected={m.eventos===o} onClick={() => set("eventos",o)} color={o==="Sim"?COLORS.danger:COLORS.greenMid} />)}</Field>
+        {m.eventos === "Sim" && <TArea value={m.eventosTexto} onChange={v => set("eventosTexto",v)} placeholder="Descreva o(s) evento(s)..." />}
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <Field label="Pacientes em situação especial?">{s2.map(o => <Pill key={o} label={o} selected={m.situacaoEspecial===o} onClick={() => set("situacaoEspecial",o)} color={o==="Sim"?COLORS.warn:COLORS.greenMid} />)}</Field>
+        {m.situacaoEspecial === "Sim" && <TArea value={m.situacaoTexto} onChange={v => set("situacaoTexto",v)} placeholder="Descreva a situação..." />}
+      </div>
+      <div>
+        <Field label="Pacientes graves">
+          {ocupados.length === 0
+            ? <span style={{ fontSize: 13, color: COLORS.muted }}>Nenhum paciente admitido.</span>
+            : ocupados.map(p => (
+              <MultiPill key={p.id} label={`${p.leito} — ${p.iniciais}`} checked={(m.leitosGraves||[]).includes(p.leito)} onChange={() => toggleLeito(p.leito)} color={COLORS.danger} />
+            ))}
+        </Field>
+      </div>
+    </div>
+  );
+}
+
 // ── App Principal ─────────────────────────────────────────────────────────────
 export default function App() {
   const isMobile = useIsMobile();
 
   const [utiSelecionada,  setUtiSelecionada]  = useState(null);
+  const [view,            setView]            = useState("round"); // "round" | "huddle" (só uti8)
   const [patients,        setPatients]        = useState([]);
   const [rounds,          setRounds]          = useState({});
+  const [huddleRounds,    setHuddleRounds]    = useState({});
+  const [huddleMeta,      setHuddleMeta]      = useState({ ...INITIAL_HUDDLE_META });
   const [selected,        setSelected]        = useState(null);
   const [editingId,       setEditingId]       = useState(null);
   const [trocarLeitoId,   setTrocarLeitoId]   = useState(null);
@@ -1147,6 +1550,16 @@ export default function App() {
   const savingPatients = useRef(new Set());
   const selectedRef    = useRef(null);
   const saveStatusRef  = useRef("");
+  const viewRef        = useRef("round");
+
+  const pendingHuddleChanges = useRef({});
+  const savingHuddlePatients = useRef(new Set());
+  const huddleSaveTimers     = useRef({});
+  const pendingMeta       = useRef(null);
+  const savingMeta        = useRef(false);
+  const metaSaveTimer     = useRef(null);
+
+  useEffect(() => { viewRef.current = view; }, [view]);
 
   useEffect(() => { selectedRef.current = selected; }, [selected]);
   useEffect(() => { saveStatusRef.current = saveStatus; }, [saveStatus]);
@@ -1224,6 +1637,113 @@ export default function App() {
     await saveLoop(id);
   }, [patients, saveLoop]);
 
+  // ── Safety Huddle: checklist reduzido por paciente (registro independente) ──
+  const saveHuddleLoop = useCallback(async (patientId) => {
+    if (savingHuddlePatients.current.has(patientId)) return;
+    savingHuddlePatients.current.add(patientId);
+    try {
+      while (pendingHuddleChanges.current[patientId] !== undefined) {
+        const dados = pendingHuddleChanges.current[patientId];
+        delete pendingHuddleChanges.current[patientId];
+        setSaveStatus("saving"); saveStatusRef.current = "saving";
+        let tentativas = 0, sucesso = false;
+        while (tentativas < 5 && !sucesso) {
+          try {
+            const { error: err } = await supabase.from("huddle_rounds").upsert({
+              patient_id: patientId, data: hojeStr(), huddle_data: dados,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: "patient_id,data" });
+            if (err) throw err;
+            sucesso = true;
+          } catch {
+            tentativas++;
+            if (tentativas < 5) await new Promise(r => setTimeout(r, 1000 * tentativas));
+          }
+        }
+        if (!sucesso) {
+          pendingHuddleChanges.current[patientId] = dados;
+          setSaveStatus("error"); saveStatusRef.current = "error";
+          break;
+        }
+      }
+      if (Object.keys(pendingHuddleChanges.current).length === 0 && saveStatusRef.current !== "error") {
+        setSaveStatus("saved"); saveStatusRef.current = "saved";
+        setTimeout(() => { setSaveStatus(prev => prev === "saved" ? "" : prev); if (saveStatusRef.current === "saved") saveStatusRef.current = ""; }, 2000);
+      }
+    } finally { savingHuddlePatients.current.delete(patientId); }
+  }, []);
+
+  const handleHuddleChange = useCallback((novoRound) => {
+    const id = selectedRef.current;
+    if (!id) return;
+    setHuddleRounds(prev => ({ ...prev, [id]: novoRound }));
+    pendingHuddleChanges.current[id] = novoRound;
+    if (huddleSaveTimers.current[id]) clearTimeout(huddleSaveTimers.current[id]);
+    huddleSaveTimers.current[id] = setTimeout(() => saveHuddleLoop(id), 400);
+  }, [saveHuddleLoop]);
+
+  const handleBackFromHuddle = useCallback(async () => {
+    const id = selectedRef.current;
+    if (id && huddleSaveTimers.current[id]) { clearTimeout(huddleSaveTimers.current[id]); delete huddleSaveTimers.current[id]; }
+    if (id && pendingHuddleChanges.current[id] !== undefined) await saveHuddleLoop(id);
+    setSelected(null);
+  }, [saveHuddleLoop]);
+
+  useEffect(() => {
+    const i = setInterval(() => {
+      Object.keys(pendingHuddleChanges.current).forEach(idStr => {
+        const id = Number(idStr);
+        if (!savingHuddlePatients.current.has(id)) saveHuddleLoop(id);
+      });
+    }, 10000);
+    return () => clearInterval(i);
+  }, [saveHuddleLoop]);
+
+  const handleNovoHuddle = useCallback(async () => {
+    const id = selectedRef.current;
+    if (!id) return;
+    const pat = patients.find(p => p.id === id);
+    const zerado = { ...INITIAL_HUDDLE_ROUND, diagnostico: pat?.diagnostico || "", medicoAssistente: pat?.medicoAssistente || "" };
+    setHuddleRounds(prev => ({ ...prev, [id]: zerado }));
+    pendingHuddleChanges.current[id] = zerado;
+    if (huddleSaveTimers.current[id]) { clearTimeout(huddleSaveTimers.current[id]); delete huddleSaveTimers.current[id]; }
+    await saveHuddleLoop(id);
+  }, [patients, saveHuddleLoop]);
+
+  // ── Safety Huddle: perguntas gerais do dia (por UTI) ────────────────────────
+  const saveMetaLoop = useCallback(async () => {
+    if (savingMeta.current) return;
+    savingMeta.current = true;
+    try {
+      while (pendingMeta.current !== null) {
+        const dados = pendingMeta.current;
+        pendingMeta.current = null;
+        let tentativas = 0, sucesso = false;
+        while (tentativas < 5 && !sucesso) {
+          try {
+            const { error: err } = await supabase.from("huddle_meta").upsert({
+              uti_id: utiSelecionada.id, data: hojeStr(), meta_data: dados,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: "uti_id,data" });
+            if (err) throw err;
+            sucesso = true;
+          } catch {
+            tentativas++;
+            if (tentativas < 5) await new Promise(r => setTimeout(r, 1000 * tentativas));
+          }
+        }
+        if (!sucesso) { pendingMeta.current = dados; break; }
+      }
+    } finally { savingMeta.current = false; }
+  }, [utiSelecionada]);
+
+  const handleMetaChange = useCallback((novoMeta) => {
+    setHuddleMeta(novoMeta);
+    pendingMeta.current = novoMeta;
+    if (metaSaveTimer.current) clearTimeout(metaSaveTimer.current);
+    metaSaveTimer.current = setTimeout(() => saveMetaLoop(), 400);
+  }, [saveMetaLoop]);
+
   // Carrega dados quando UTI é selecionada
   useEffect(() => {
     if (!utiSelecionada) return;
@@ -1246,6 +1766,21 @@ export default function App() {
         const map = {};
         (rds || []).forEach(r => { map[r.patient_id] = normalizarRound(r.round_data); });
         setRounds(map);
+
+        if (utiSelecionada.id === "uti8") {
+          const { data: hrds } = patIds.length > 0
+            ? await supabase.from("huddle_rounds").select("*").eq("data", dataHoje).in("patient_id", patIds)
+            : { data: [] };
+          const hmap = {};
+          (hrds || []).forEach(r => { hmap[r.patient_id] = normalizarHuddleRound(r.huddle_data); });
+          setHuddleRounds(hmap);
+          const { data: hmeta } = await supabase.from("huddle_meta").select("*").eq("uti_id", utiSelecionada.id).eq("data", dataHoje).maybeSingle();
+          setHuddleMeta(normalizarHuddleMeta(hmeta?.meta_data));
+        } else {
+          setHuddleRounds({}); setHuddleMeta({ ...INITIAL_HUDDLE_META });
+        }
+        setView("round");
+
         const seteDiasAtras = new Date(); seteDiasAtras.setDate(seteDiasAtras.getDate() - 7);
         const { data: rels } = await supabase.from("relatorios").select("*")
           .eq("uti_id", utiSelecionada.id)
@@ -1277,6 +1812,17 @@ export default function App() {
           gravidade: p.gravidade||"livre", dataAdm: p.dataAdm||null, idade: p.idade||null,
         })));
         if (rds) { const map = {}; rds.forEach(r => { map[r.patient_id] = normalizarRound(r.round_data); }); setRounds(map); }
+
+        if (utiSelecionada.id === "uti8" && Object.keys(pendingHuddleChanges.current).length === 0 && savingHuddlePatients.current.size === 0) {
+          const { data: hrds } = patIds.length > 0
+            ? await supabase.from("huddle_rounds").select("*").eq("data", dataHoje).in("patient_id", patIds)
+            : { data: [] };
+          if (hrds) { const hmap = {}; hrds.forEach(r => { hmap[r.patient_id] = normalizarHuddleRound(r.huddle_data); }); setHuddleRounds(hmap); }
+          if (!pendingMeta.current) {
+            const { data: hmeta } = await supabase.from("huddle_meta").select("*").eq("uti_id", utiSelecionada.id).eq("data", dataHoje).maybeSingle();
+            setHuddleMeta(normalizarHuddleMeta(hmeta?.meta_data));
+          }
+        }
       } catch { /* silencioso */ }
     }, 30000);
     return () => clearInterval(i);
@@ -1294,10 +1840,14 @@ export default function App() {
   const clearPatient = async (id) => {
     setPatients(prev => prev.map(p => p.id===id ? {...p, iniciais:"", idade:null, dataAdm:null, diagnostico:"", medicoAssistente:"", gravidade:"livre"} : p));
     setRounds(prev => { const n={...prev}; delete n[id]; return n; });
+    setHuddleRounds(prev => { const n={...prev}; delete n[id]; return n; });
     delete pendingChanges.current[id];
+    delete pendingHuddleChanges.current[id];
     if (saveTimers.current[id]) { clearTimeout(saveTimers.current[id]); delete saveTimers.current[id]; }
+    if (huddleSaveTimers.current[id]) { clearTimeout(huddleSaveTimers.current[id]); delete huddleSaveTimers.current[id]; }
     await supabase.from("patients").update({ iniciais:"", idade:null, dataAdm:null, diagnostico:"", medicoAssistente:"", gravidade:"livre" }).eq("id", id);
     await supabase.from("rounds").delete().eq("patient_id", id).eq("data", hojeStr());
+    if (utiSelecionada.id === "uti8") await supabase.from("huddle_rounds").delete().eq("patient_id", id).eq("data", hojeStr());
   };
 
   // Troca de leito: se destino vago, move; se ocupado, faz swap completo (dados + rounds)
@@ -1316,6 +1866,14 @@ export default function App() {
 
     // Troca rounds em memória
     setRounds(prev => {
+      const n = { ...prev };
+      const rOrigem  = n[origem.id];
+      const rDestino = n[destino.id];
+      if (rOrigem)  n[destino.id] = rOrigem;  else delete n[destino.id];
+      if (rDestino) n[origem.id]  = rDestino; else delete n[origem.id];
+      return n;
+    });
+    setHuddleRounds(prev => {
       const n = { ...prev };
       const rOrigem  = n[origem.id];
       const rDestino = n[destino.id];
@@ -1347,18 +1905,38 @@ export default function App() {
         await supabase.from("rounds").update({ patient_id: origem.id, updated_at: new Date().toISOString() }).eq("id", rDestino.id);
       }
     }
+
+    // Troca huddle_rounds do dia no banco usando patient_id
+    if (utiSelecionada.id === "uti8") {
+      const { data: hrdsHoje } = await supabase.from("huddle_rounds").select("id,patient_id,huddle_data").eq("data", dataHoje).in("patient_id", [origem.id, destino.id]);
+      if (hrdsHoje && hrdsHoje.length > 0) {
+        const hOrigem  = hrdsHoje.find(r => r.patient_id === origem.id);
+        const hDestino = hrdsHoje.find(r => r.patient_id === destino.id);
+        if (hOrigem && hDestino) {
+          await supabase.from("huddle_rounds").update({ huddle_data: hDestino.huddle_data, updated_at: new Date().toISOString() }).eq("id", hOrigem.id);
+          await supabase.from("huddle_rounds").update({ huddle_data: hOrigem.huddle_data,  updated_at: new Date().toISOString() }).eq("id", hDestino.id);
+        } else if (hOrigem) {
+          await supabase.from("huddle_rounds").update({ patient_id: destino.id, updated_at: new Date().toISOString() }).eq("id", hOrigem.id);
+        } else if (hDestino) {
+          await supabase.from("huddle_rounds").update({ patient_id: origem.id, updated_at: new Date().toISOString() }).eq("id", hDestino.id);
+        }
+      }
+    }
   };
 
   const clearAll = async () => {
     const ids = patients.map(p => p.id);
     setPatients(prev => prev.map(p => ({...p, iniciais:"", idade:null, dataAdm:null, diagnostico:"", medicoAssistente:"", gravidade:"livre"})));
-    setRounds({}); setShowClearAll(false);
-    pendingChanges.current = {};
+    setRounds({}); setHuddleRounds({}); setShowClearAll(false);
+    pendingChanges.current = {}; pendingHuddleChanges.current = {};
     Object.keys(saveTimers.current).forEach(k => clearTimeout(saveTimers.current[k]));
     saveTimers.current = {};
+    Object.keys(huddleSaveTimers.current).forEach(k => clearTimeout(huddleSaveTimers.current[k]));
+    huddleSaveTimers.current = {};
     if (ids.length > 0) {
       await supabase.from("patients").update({ iniciais:"", idade:null, dataAdm:null, diagnostico:"", medicoAssistente:"", gravidade:"livre" }).in("id", ids);
       await supabase.from("rounds").delete().eq("data", hojeStr()).in("patient_id", ids);
+      if (utiSelecionada.id === "uti8") await supabase.from("huddle_rounds").delete().eq("data", hojeStr()).in("patient_id", ids);
     }
   };
 
@@ -1377,7 +1955,11 @@ export default function App() {
     if (rel.id) await supabase.from("relatorios").delete().eq("id", rel.id);
   };
 
-  if (!utiSelecionada) return <UtiSelector onSelect={(u) => { setUtiSelecionada(u); setPatients([]); setRounds({}); setRelatorios([]); }} />;
+  if (!utiSelecionada) return <UtiSelector onSelect={(u) => { setUtiSelecionada(u); setPatients([]); setRounds({}); setHuddleRounds({}); setHuddleMeta({ ...INITIAL_HUDDLE_META }); setRelatorios([]); setView("round"); }} />;
+
+  const isHuddle    = view === "huddle" && utiSelecionada.id === "uti8";
+  const activeRounds = isHuddle ? huddleRounds : rounds;
+  const computeActiveAlerts = isHuddle ? computeHuddleAlerts : computeAlerts;
 
   const selPat      = patients.find(p => p.id === selected);
   const editPat     = patients.find(p => p.id === editingId);
@@ -1387,16 +1969,16 @@ export default function App() {
     : { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
 
   const withPats     = patients.filter(p => p.iniciais);
-  const roundsDone   = withPats.filter(p => rounds[p.id]).length;
+  const roundsDone   = withPats.filter(p => activeRounds[p.id]).length;
   const total        = withPats.length;
-  const totalAlertas = patients.filter(p => computeAlerts(rounds[p.id], p).length > 0).length;
+  const totalAlertas = patients.filter(p => computeActiveAlerts(activeRounds[p.id], p).length > 0).length;
 
   const filtered = patients.filter(p => {
     if (search) {
       const q = search.toLowerCase();
       if (!p.iniciais?.toLowerCase().includes(q) && !p.leito?.toLowerCase().includes(q)) return false;
     }
-    if (filter==="pendente" && (!p.iniciais || rounds[p.id])) return false;
+    if (filter==="pendente" && (!p.iniciais || activeRounds[p.id])) return false;
     if (filter==="alta"     && p.gravidade!=="alta") return false;
     return true;
   });
@@ -1433,15 +2015,27 @@ export default function App() {
         </div>
       </div>
       <div style={{ padding: isMobile ? 14 : 24 }}>
-        <RoundForm
-          pat={selPat}
-          round={rounds[selected] || { ...INITIAL_ROUND, diagnostico: selPat.diagnostico || "", medicoAssistente: selPat.medicoAssistente || "" }}
-          onChange={handleChange}
-          onBack={handleBackFromRound}
-          onNovoRound={handleNovoRound}
-          isMobile={isMobile}
-          saveStatus={saveStatus}
-        />
+        {isHuddle ? (
+          <HuddleForm
+            pat={selPat}
+            round={huddleRounds[selected] || { ...INITIAL_HUDDLE_ROUND, diagnostico: selPat.diagnostico || "", medicoAssistente: selPat.medicoAssistente || "" }}
+            onChange={handleHuddleChange}
+            onBack={handleBackFromHuddle}
+            onNovoRound={handleNovoHuddle}
+            isMobile={isMobile}
+            saveStatus={saveStatus}
+          />
+        ) : (
+          <RoundForm
+            pat={selPat}
+            round={rounds[selected] || { ...INITIAL_ROUND, diagnostico: selPat.diagnostico || "", medicoAssistente: selPat.medicoAssistente || "" }}
+            onChange={handleChange}
+            onBack={handleBackFromRound}
+            onNovoRound={handleNovoRound}
+            isMobile={isMobile}
+            saveStatus={saveStatus}
+          />
+        )}
       </div>
     </div>
   );
@@ -1454,7 +2048,7 @@ export default function App() {
             <span style={{ fontSize: isMobile ? 20 : 22 }}>🏥</span>
             <div>
               <div style={{ color: "#fff", fontWeight: 800, fontSize: isMobile ? 14 : 17 }}>{utiSelecionada.label}</div>
-              <div style={{ color: "rgba(255,255,255,.7)", fontSize: 11 }}>{isMobile ? date : `Round Multidisciplinar · ${patients.length} leitos`}</div>
+              <div style={{ color: "rgba(255,255,255,.7)", fontSize: 11 }}>{isMobile ? date : `${isHuddle ? "Safety Huddle" : "Round Multidisciplinar"} · ${patients.length} leitos`}</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -1483,11 +2077,27 @@ export default function App() {
         </div>
       </div>
 
+      {utiSelecionada.id === "uti8" && (
+        <div style={{ background: "#fff", borderBottom: `1px solid ${COLORS.border}`, padding: isMobile ? "8px 14px" : "10px 28px" }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {[["round","🩺 Round"],["huddle","🛟 Safety Huddle"]].map(([v,l]) => (
+              <button type="button" key={v} onClick={() => { setView(v); setSearch(""); setFilter("todos"); }} style={{
+                padding: "8px 16px", borderRadius: 10,
+                border: `1.5px solid ${view === v ? COLORS.greenMid : COLORS.border}`,
+                background: view === v ? COLORS.greenMid : "#fff",
+                color: view === v ? "#fff" : COLORS.green,
+                fontSize: 13, fontWeight: 700, cursor: "pointer", minHeight: 38,
+              }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ padding: isMobile ? "14px 14px" : "24px 28px" }}>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "repeat(4,1fr)", gap: isMobile ? 10 : 14, marginBottom: 16 }}>
           {[
             ["Leitos ocupados", total,             COLORS.green,   "🛏"],
-            ["Rounds feitos",   roundsDone,         COLORS.success, "✅"],
+            [isHuddle ? "Huddles feitos" : "Rounds feitos", roundsDone, COLORS.success, "✅"],
             ["Pendentes",       total - roundsDone, COLORS.warn,    "⏳"],
             ["Alertas",         totalAlertas,        COLORS.danger,  "⚠️"],
           ].map(([lbl, val, color, icon]) => (
@@ -1501,13 +2111,15 @@ export default function App() {
 
         <div style={{ background: "#fff", borderRadius: 12, padding: "14px 16px", border: `1px solid ${COLORS.border}`, marginBottom: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 700, color: COLORS.green }}>Progresso do round</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: COLORS.green }}>{isHuddle ? "Progresso do huddle" : "Progresso do round"}</span>
             <span style={{ fontSize: 13, color: COLORS.muted }}>{roundsDone}/{total} leitos</span>
           </div>
           <div style={{ background: COLORS.border, borderRadius: 8, height: 8 }}>
             <div style={{ width: `${total ? (roundsDone / total) * 100 : 0}%`, height: "100%", background: COLORS.greenMid, borderRadius: 8, transition: "width .4s" }} />
           </div>
         </div>
+
+        {isHuddle && <HuddleMetaCard meta={huddleMeta} onChange={handleMetaChange} patients={patients} isMobile={isMobile} />}
 
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 Buscar paciente ou leito..."
@@ -1536,7 +2148,7 @@ export default function App() {
           {filtered.length === 0 ? (
             <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: 40, color: COLORS.muted, fontSize: 14 }}>Nenhum leito encontrado.</div>
           ) : (
-            filtered.map(p => <PatientCard key={p.id} pat={p} round={rounds[p.id]} onSelect={setSelected} onEdit={setEditingId} />)
+            filtered.map(p => <PatientCard key={p.id} pat={p} round={activeRounds[p.id]} onSelect={setSelected} onEdit={setEditingId} alertsFn={computeActiveAlerts} doneLabel={isHuddle ? "✓ Huddle feito" : "✓ Round feito"} />)
           )}
         </div>
       </div>
@@ -1558,7 +2170,9 @@ export default function App() {
           onClose={() => setTrocarLeitoId(null)}
         />
       )}
-      {showRelatorio  && <RelatorioModal patients={patients} rounds={rounds} onClose={() => setShowRelatorio(false)} onSave={salvarRelatorio} utiLabel={utiSelecionada.label} />}
+      {showRelatorio  && (isHuddle
+        ? <HuddleRelatorioModal patients={patients} huddleRounds={huddleRounds} meta={huddleMeta} onClose={() => setShowRelatorio(false)} onSave={salvarRelatorio} utiLabel={utiSelecionada.label} />
+        : <RelatorioModal patients={patients} rounds={rounds} onClose={() => setShowRelatorio(false)} onSave={salvarRelatorio} utiLabel={utiSelecionada.label} />)}
       {showHistorico  && <HistoricoModal relatorios={relatorios} onDelete={deletarRelatorio} onClose={() => setShowHistorico(false)} isMobile={isMobile} />}
       {showClearAll   && <ConfirmModal
         icon="🗑️"
